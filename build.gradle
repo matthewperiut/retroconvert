@@ -1,0 +1,116 @@
+plugins {
+	id 'java'
+	id 'maven-publish'
+	id 'net.fabricmc.fabric-loom-remap' version '1.16.3'
+	id 'ploceus' version '1.16.1'
+}
+
+base {
+	archivesName = project.archives_base_name
+}
+version = "${project.version}+mc${project.minecraft_version}"
+group = project.maven_group
+
+ploceus {
+	setIntermediaryGeneration(2)
+}
+
+repositories {
+	// Add repositories to retrieve artifacts from in here.
+	// You should only use this when depending on other mods because
+	// Loom adds the essential maven repositories to download Minecraft and libraries from automatically.
+	// See https://docs.gradle.org/current/userguide/declaring_repositories.html
+	// for more information about repositories.
+}
+
+configurations {
+	converterTools
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+
+	mappings ploceus.featherMappings(project.feather_build)
+	clientExceptions ploceus.raven(project.client_raven_build, 'client')
+	serverExceptions ploceus.raven(project.server_raven_build, 'server')
+	clientSignatures ploceus.sparrow(project.client_sparrow_build, 'client')
+	serverSignatures ploceus.sparrow(project.server_sparrow_build, 'server')
+	clientNests ploceus.nests(project.client_nests_build, 'client')
+	serverNests ploceus.nests(project.server_nests_build, 'server')
+
+	// ASM is provided by fabric-loader at runtime; only needed at compile time.
+	compileOnly "org.ow2.asm:asm:9.6"
+	compileOnly "org.ow2.asm:asm-commons:9.6"
+
+	converterTools "org.ow2.asm:asm-commons:9.6"
+}
+
+// Run the converter headlessly against a mods folder, outside the game:
+//   ./gradlew runConverter --args="/path/to/mods [/path/to/retroconvert.json]"
+tasks.register('runConverter', JavaExec) {
+	group = 'retroconvert'
+	description = 'Run the RetroConvert pipeline against a mods directory without launching the game.'
+	classpath = sourceSets.main.output + configurations.converterTools
+	mainClass = 'com.periut.retroconvert.ConverterCli'
+}
+
+processResources {
+	inputs.property 'version', version
+
+	filesMatching('fabric.mod.json') {
+		expand 'version': version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.encoding = 'UTF-8'
+	it.options.release = 8
+}
+
+java {
+	// Still required by IDEs such as Eclipse and Visual Studio Code
+	sourceCompatibility = JavaVersion.VERSION_1_8
+	targetCompatibility = JavaVersion.VERSION_1_8
+
+	// Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task if it is present.
+	// If you remove this line, sources will not be generated.
+	withSourcesJar()
+
+	// If this mod is going to be a library, then it should also generate Javadocs in order to aid with development.
+	// Uncomment this line to generate them.
+	// withJavadocJar()
+}
+
+// If you plan to use a different file for the license, don't forget to change the file name here!
+jar {
+	from('LICENSE') {
+		rename { "${it}_${base.archivesName.get()}" }
+	}
+
+	// the same jar doubles as an optional java agent (-javaagent:...) that
+	// converts babric mods before fabric loader even scans the mods folder
+	manifest {
+		attributes(
+			'Premain-Class': 'com.periut.retroconvert.AgentMain',
+			'Agent-Class': 'com.periut.retroconvert.AgentMain'
+		)
+	}
+}
+
+// Configure the maven publication
+publishing {
+	publications {
+		mavenJava(MavenPublication) {
+			from components.java
+		}
+	}
+
+	// See https://docs.gradle.org/current/userguide/publishing_maven.html for information on how to set up publishing.
+	repositories {
+		// Add repositories to publish to here.
+		// Notice: This block does NOT have the same function as the block in the top level.
+		// The repositories here will be used for publishing your artifact, not for
+		// retrieving dependencies.
+	}
+}
