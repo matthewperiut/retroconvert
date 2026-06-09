@@ -15,6 +15,12 @@ Outputs a compact TSV token map consumed by the RetroConvert runtime remapper:
   f  <field_N>          <calamusName>
   M  <babricOwner> <name> <desc> <calamusName>   (owner-aware oddballs)
   F  <babricOwner> <name> <calamusName>          (owner-aware oddballs)
+
+Reverse (calamus -> babric) is a bijection EXCEPT where calamus merged several
+babric tokens into one. For those we emit owner-aware reverse rows so the
+runtime can disambiguate by the call's owner (which is in calamus space):
+  RM <calamusOwner> <calamusName> <calamusDesc> <babricToken>
+  RF <calamusName>  <babricToken>                (client-preferred; owner can't split it)
 """
 import io
 import re
@@ -172,6 +178,8 @@ method_map = {}          # token -> calamus name
 field_map = {}           # token -> calamus name
 odd_methods = []         # (ownerInt, nameInt, descInt, calamusName)
 odd_fields = []          # (ownerInt, nameInt, calamusName)
+m_token_recs = []        # (ownerInt, descInt, token, calamusName, clientName) for token methods
+f_token_recs = []        # (ownerInt, token, calamusName, clientName) for token fields
 method_conflicts = []
 field_conflicts = []
 unmatched_members = []
@@ -192,6 +200,7 @@ for owner_int, desc_int, n_int, n_g, n_s, n_c in b_methods:
         if prev and prev != target:
             method_conflicts.append((n_int, prev, target))
         method_map[n_int] = target
+        m_token_recs.append((owner_int, desc_int, n_int, target, n_c))
     elif n_int != target:
         odd_methods.append((owner_int, n_int, desc_int, target))
 
@@ -211,8 +220,34 @@ for owner_int, desc_int, n_int, n_g, n_s, n_c in b_fields:
         if prev and prev != target:
             field_conflicts.append((n_int, prev, target))
         field_map[n_int] = target
+        f_token_recs.append((owner_int, n_int, target, n_c))
     elif n_int != target:
         odd_fields.append((owner_int, n_int, target))
+
+# ---------- reverse-disambiguation rows for many-to-one (calamus merged) tokens ----------
+# A calamus token that several babric tokens map to is ambiguous on the way back.
+# Methods split by owner: emit owner-aware reverse rows in calamus space.
+m_target_count = defaultdict(int)
+for _o, _d, _t, tgt, _c in m_token_recs:
+    m_target_count[tgt] += 1
+rev_methods = []   # (calamusOwner, calamusName, calamusDesc, babricToken)
+for owner_int, desc_int, token, target, n_c in m_token_recs:
+    if m_target_count[target] > 1:
+        c_owner = class_map.get(owner_int, owner_int)
+        c_desc = remap_desc(desc_int, class_map)
+        rev_methods.append((c_owner, target, c_desc, token))
+
+# Fields collide on the same owner (a client/server pair), so owner can't split
+# them; prefer the client-side babric token (client mods are what we target).
+f_target_recs = defaultdict(list)
+for owner_int, token, target, n_c in f_token_recs:
+    f_target_recs[target].append((token, n_c))
+rev_fields = []    # (calamusName, babricToken)
+for target, recs in f_target_recs.items():
+    if len(recs) > 1:
+        client = [t for t, nc in recs if nc]
+        chosen = client[-1] if client else recs[-1][0]
+        rev_fields.append((target, chosen))
 
 # ---------- write output ----------
 with open(OUT, "w") as f:
@@ -227,12 +262,18 @@ with open(OUT, "w") as f:
         f.write(f"M\t{owner}\t{name}\t{desc}\t{target}\n")
     for owner, name, target in sorted(odd_fields):
         f.write(f"F\t{owner}\t{name}\t{target}\n")
+    for c_owner, c_name, c_desc, token in sorted(rev_methods):
+        f.write(f"RM\t{c_owner}\t{c_name}\t{c_desc}\t{token}\n")
+    for c_name, token in sorted(rev_fields):
+        f.write(f"RF\t{c_name}\t{token}\n")
 
 print(f"classes mapped:     {len(class_map)}")
 print(f"method tokens:      {len(method_map)}")
 print(f"field tokens:       {len(field_map)}")
 print(f"odd methods (owner-aware, non-token, renamed): {len(odd_methods)}")
 print(f"odd fields  (owner-aware, non-token, renamed): {len(odd_fields)}")
+print(f"reverse-disambiguation method rows (RM): {len(rev_methods)}")
+print(f"reverse-disambiguation field rows  (RF): {len(rev_fields)}")
 print(f"class conflicts (client/server join disagree): {len(class_conflicts)}")
 print(f"method token conflicts: {len(method_conflicts)}")
 print(f"field token conflicts:  {len(field_conflicts)}")

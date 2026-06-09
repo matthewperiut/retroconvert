@@ -43,9 +43,16 @@ public final class JarConverter {
 					+ "|com[./]matthewperiut[./]accessoryapi");
 
 	private final TokenMap map;
+	private final boolean reverse;
 
 	public JarConverter(TokenMap map) {
+		this(map, false);
+	}
+
+	/** @param reverse convert ornithe jars back to babric (the inverse direction) */
+	public JarConverter(TokenMap map, boolean reverse) {
 		this.map = map;
+		this.reverse = reverse;
 	}
 
 	/** Reads every entry of a jar (from a stream) into memory, preserving order. */
@@ -166,7 +173,8 @@ public final class JarConverter {
 				continue; // contents change; signatures must go
 			}
 			// the accessoryapi package moved, so its class/resource paths move too
-			String outName = name.startsWith(TokenMap.OLD_API_SLASH + "/")
+			// (forward only: the reverse direction leaves the package in place)
+			String outName = (!reverse && name.startsWith(TokenMap.OLD_API_SLASH + "/"))
 					? TokenMap.NEW_API_SLASH + name.substring(TokenMap.OLD_API_SLASH.length())
 					: name;
 			byte[] outData;
@@ -211,7 +219,7 @@ public final class JarConverter {
 	/** Nested jars are full mods of their own; convert them the same way if needed. */
 	private byte[] convertNestedJar(byte[] data) throws IOException {
 		Map<String, byte[]> nested = readEntries(new ByteArrayInputStream(data));
-		if (detect(nested) != Kind.BABRIC) {
+		if (detect(nested) != (reverse ? Kind.ORNITHE : Kind.BABRIC)) {
 			return data;
 		}
 		return convert(nested);

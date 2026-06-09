@@ -5911,3 +5911,28 @@ F	argo/saj/PositionTrackingPushbackReader	characterCount	f_24522302
 F	argo/saj/PositionTrackingPushbackReader	lastCharacterWasCarriageReturn	f_10793909
 F	argo/saj/PositionTrackingPushbackReader	lineCount	f_44886268
 F	argo/saj/PositionTrackingPushbackReader	pushbackReader	f_63249157
+RM	net/minecraft/unmapped/C_35928469	compare	(Lnet/minecraft/unmapped/C_68333747;Lnet/minecraft/unmapped/C_68333747;)I	method_1421
+RM	net/minecraft/unmapped/C_40735137	m_38999452	()V	method_947
+RM	net/minecraft/unmapped/C_43616774	m_38999452	()V	method_947
+RM	net/minecraft/unmapped/C_46108969	m_46357017	(III)Z	method_1783
+RM	net/minecraft/unmapped/C_46108969	m_72354999	()Lnet/minecraft/unmapped/C_28112798;	method_1781
+RM	net/minecraft/unmapped/C_46108969	m_80119644	(III)F	method_1782
+RM	net/minecraft/unmapped/C_46259750	compareTo	(Lnet/minecraft/unmapped/C_46259750;)I	method_2096
+RM	net/minecraft/unmapped/C_57536588	compare	(Lnet/minecraft/unmapped/C_30892219;Lnet/minecraft/unmapped/C_30892219;)I	method_543
+RM	net/minecraft/unmapped/C_64041439	m_46357017	(III)Z	method_1783
+RM	net/minecraft/unmapped/C_64041439	m_72354999	()Lnet/minecraft/unmapped/C_28112798;	method_1781
+RM	net/minecraft/unmapped/C_64041439	m_80119644	(III)F	method_1782
+RM	net/minecraft/unmapped/C_65241348	compare	(Lnet/minecraft/unmapped/C_68333747;Lnet/minecraft/unmapped/C_68333747;)I	method_1147
+RM	net/minecraft/unmapped/C_71226614	compareTo	(Lnet/minecraft/unmapped/C_71226614;)I	method_1198
+RM	net/minecraft/unmapped/C_72342472	m_18055305	(Ljava/lang/String;)Lnet/minecraft/unmapped/C_64676926;	method_1004
+RM	net/minecraft/unmapped/C_72342472	m_46878601	(Ljava/lang/String;Z)Lnet/minecraft/unmapped/C_08489468;	method_1009
+RM	net/minecraft/unmapped/C_81592558	m_27822537	()Ljava/lang/String;	method_1597
+RM	net/minecraft/unmapped/C_86464455	compare	(Lnet/minecraft/unmapped/C_89105241;Lnet/minecraft/unmapped/C_89105241;)I	method_376
+RM	net/minecraft/unmapped/C_87007645	compareTo	(Lnet/minecraft/unmapped/C_87007645;)I	method_1957
+RM	net/minecraft/unmapped/C_88708284	m_27822537	()Ljava/lang/String;	method_726
+RM	net/minecraft/unmapped/C_93816630	compareTo	(Lnet/minecraft/unmapped/C_93816630;)I	method_1236
+RM	net/minecraft/unmapped/C_94908875	compare	(Lnet/minecraft/unmapped/C_89105241;Lnet/minecraft/unmapped/C_89105241;)I	method_382
+RM	net/minecraft/unmapped/C_98861173	m_18055305	(Ljava/lang/String;)Lnet/minecraft/unmapped/C_64676926;	method_1004
+RM	net/minecraft/unmapped/C_98861173	m_46878601	(Ljava/lang/String;Z)Lnet/minecraft/unmapped/C_08489468;	method_1009
+RM	net/minecraft/unmapped/C_98888256	m_27822537	()Ljava/lang/String;	method_443
+RF	f_98282398	field_504

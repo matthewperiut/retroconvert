@@ -65,6 +65,7 @@ public final class Converter {
 	private final Path registryPath;
 	private final Path backupDir;
 	private final Log log;
+	private final boolean reverse;
 	private LockReleaser lockReleaser;
 	private final List<Planned> planned = new ArrayList<Planned>();
 	private final java.util.Set<Path> plannedTargets = new java.util.HashSet<Path>();
@@ -80,10 +81,21 @@ public final class Converter {
 
 	/** @param configBaseDir usually {@code config/retroconvert}; holds cache.json and originals/ */
 	public Converter(Path modsDir, Path configBaseDir, Log log) {
+		this(modsDir, configBaseDir, log, false);
+	}
+
+	/**
+	 * @param reverse convert ornithe (calamus gen2) jars back to babric instead of
+	 *     the default babric -> ornithe. The reverse direction skips the
+	 *     accessoryapi package move and the official-build replacements, both of
+	 *     which are forward-only.
+	 */
+	public Converter(Path modsDir, Path configBaseDir, Log log, boolean reverse) {
 		this.modsDir = modsDir;
 		this.registryPath = configBaseDir.resolve("cache.json");
 		this.backupDir = configBaseDir.resolve("originals");
 		this.log = log;
+		this.reverse = reverse;
 	}
 
 	public void setLockReleaser(LockReleaser lockReleaser) {
@@ -98,11 +110,11 @@ public final class Converter {
 			throw new IOException("bundled mapping resource missing");
 		}
 		try {
-			tokenMap = TokenMap.load(mappingsIn);
+			tokenMap = TokenMap.load(mappingsIn, reverse);
 		} finally {
 			mappingsIn.close();
 		}
-		JarConverter converter = new JarConverter(tokenMap);
+		JarConverter converter = new JarConverter(tokenMap, reverse);
 		Registry registry = Registry.load(registryPath);
 
 		List<Path> jars = new ArrayList<Path>();
@@ -227,7 +239,7 @@ public final class Converter {
 			// Upgrade path: this jar is one of OUR earlier bytecode conversions,
 			// but the mod now has an official Ornithe build (rules can ship after
 			// a mod was already converted). Swap it for the real thing.
-			if (Registry.STATUS_OUTPUT.equals(known.status)
+			if (!reverse && Registry.STATUS_OUTPUT.equals(known.status)
 					&& findReplacement(fileName, jarBytes.length) != null) {
 				log.info("RetroConvert: " + fileName + " is an old bytecode conversion with an official Ornithe build available; upgrading");
 				if (tryReplace(jar, fileName, hash, findReplacement(fileName, jarBytes.length), registry, result)) {
@@ -254,30 +266,34 @@ public final class Converter {
 		}
 
 		JarConverter.Kind kind = JarConverter.detect(entries);
-		switch (kind) {
-		case ORNITHE:
-			result.alreadyOrnithe++;
-			registry.put(hash, new Registry.Entry(fileName, Registry.STATUS_ORNITHE, null, System.currentTimeMillis()));
-			return;
-		case NEUTRAL:
+		// forward converts babric jars; reverse converts ornithe jars. The other
+		// intermediary kind is "already in the target form" — leave it alone.
+		JarConverter.Kind convertKind = reverse ? JarConverter.Kind.ORNITHE : JarConverter.Kind.BABRIC;
+		if (kind == JarConverter.Kind.NEUTRAL) {
 			result.neutral++;
 			registry.put(hash, new Registry.Entry(fileName, Registry.STATUS_NEUTRAL, null, System.currentTimeMillis()));
 			return;
-		case BABRIC:
-		default:
-			break;
 		}
-
-		// Some mods changed too much between toolchains for a bytecode rewrite to
-		// be enough; for those, swap in the official Ornithe build instead.
-		Replacement replacement = findReplacement(fileName, jarBytes.length);
-		if (replacement != null && tryReplace(jar, fileName, hash, replacement, registry, result)) {
+		if (kind != convertKind) {
+			result.alreadyOrnithe++;
+			registry.put(hash, new Registry.Entry(fileName, Registry.STATUS_ORNITHE, null, System.currentTimeMillis()));
 			return;
 		}
 
-		log.info("RetroConvert: converting babric mod " + fileName + " to ornithe intermediaries");
+		// Some mods changed too much between toolchains for a bytecode rewrite to
+		// be enough; for those, swap in the official Ornithe build instead. This is
+		// forward-only — there are no official babric builds to fall back to.
+		if (!reverse) {
+			Replacement replacement = findReplacement(fileName, jarBytes.length);
+			if (replacement != null && tryReplace(jar, fileName, hash, replacement, registry, result)) {
+				return;
+			}
+		}
+
+		log.info("RetroConvert: converting " + (reverse ? "ornithe mod " + fileName + " to babric intermediaries"
+				: "babric mod " + fileName + " to ornithe intermediaries"));
 		byte[] convertedBytes = converter.convert(entries);
-		String outName = outputName(fileName);
+		String outName = outputName(fileName, reverse);
 		Path outPath = uniqueTarget(modsDir, outName);
 		Path tmpPath = modsDir.resolve(outPath.getFileName() + ".retroconvert.tmp");
 		Files.write(tmpPath, convertedBytes);
@@ -429,13 +445,18 @@ public final class Converter {
 		return null;
 	}
 
-	/** retrocommands-0.5.10-babric.jar -> retrocommands-0.5.10-ornithe.jar */
-	private static String outputName(String fileName) {
+	/**
+	 * forward: retrocommands-0.5.10-babric.jar -> retrocommands-0.5.10-ornithe.jar
+	 * reverse: retrocommands-0.5.10-ornithe.jar -> retrocommands-0.5.10-babric.jar
+	 */
+	private static String outputName(String fileName, boolean reverse) {
 		String stem = fileName.substring(0, fileName.length() - ".jar".length());
-		if (stem.endsWith("-babric")) {
-			stem = stem.substring(0, stem.length() - "-babric".length());
+		String from = reverse ? "-ornithe" : "-babric";
+		String to = reverse ? "-babric" : "-ornithe";
+		if (stem.endsWith(from)) {
+			stem = stem.substring(0, stem.length() - from.length());
 		}
-		return stem + "-ornithe.jar";
+		return stem + to + ".jar";
 	}
 
 	/** picks a name not taken on disk NOR by an already-staged swap */

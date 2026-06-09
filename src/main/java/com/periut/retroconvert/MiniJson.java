@@ -168,6 +168,67 @@ public final class MiniJson {
 
 	// ---------- writing ----------
 
+	/** Serializes a parsed JSON tree (Map/List/String/Number/Boolean/null) back to pretty JSON. */
+	public static String write(Object value) {
+		StringBuilder sb = new StringBuilder(256);
+		write(sb, value, 0);
+		sb.append('\n');
+		return sb.toString();
+	}
+
+	private static void write(StringBuilder sb, Object value, int indent) {
+		if (value == null) {
+			sb.append("null");
+		} else if (value instanceof String) {
+			writeString(sb, (String) value);
+		} else if (value instanceof Map) {
+			Map<?, ?> map = (Map<?, ?>) value;
+			if (map.isEmpty()) {
+				sb.append("{}");
+				return;
+			}
+			sb.append("{\n");
+			int i = 0;
+			for (Map.Entry<?, ?> e : map.entrySet()) {
+				pad(sb, indent + 1);
+				writeString(sb, String.valueOf(e.getKey()));
+				sb.append(": ");
+				write(sb, e.getValue(), indent + 1);
+				if (++i < map.size()) {
+					sb.append(',');
+				}
+				sb.append('\n');
+			}
+			pad(sb, indent);
+			sb.append('}');
+		} else if (value instanceof List) {
+			List<?> list = (List<?>) value;
+			if (list.isEmpty()) {
+				sb.append("[]");
+				return;
+			}
+			sb.append("[\n");
+			for (int i = 0; i < list.size(); i++) {
+				pad(sb, indent + 1);
+				write(sb, list.get(i), indent + 1);
+				if (i + 1 < list.size()) {
+					sb.append(',');
+				}
+				sb.append('\n');
+			}
+			pad(sb, indent);
+			sb.append(']');
+		} else { // Boolean, Long, Double
+			sb.append(value.toString());
+		}
+	}
+
+	private static void pad(StringBuilder sb, int indent) {
+		for (int i = 0; i < indent; i++) {
+			sb.append("  ");
+		}
+	}
+
 	public static void writeString(StringBuilder sb, String s) {
 		sb.append('"');
 		for (int i = 0; i < s.length(); i++) {
