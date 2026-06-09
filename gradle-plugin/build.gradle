@@ -1,0 +1,69 @@
+plugins {
+	id 'java-gradle-plugin'
+	id 'maven-publish'
+}
+
+group = 'com.periut'
+version = '1.0.0'
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	// The conversion engine remaps bytecode with ASM; these are needed at runtime
+	// inside Gradle (the engine's only third-party dependency).
+	implementation 'org.ow2.asm:asm:9.6'
+	implementation 'org.ow2.asm:asm-commons:9.6'
+}
+
+// Reuse the parent retroconvert mod's engine sources verbatim — no copy, no drift. This
+// build lives in retroconvert/gradle-plugin, so the engine is one directory up. Only
+// RetroConvert.java and LoaderGrip.java touch fabric-loader, so they are excluded;
+// everything else is plain Java + ASM and compiles standalone here.
+sourceSets {
+	main {
+		java {
+			srcDir '../src/main/java'
+			exclude '**/RetroConvert.java'
+			exclude '**/LoaderGrip.java'
+		}
+		resources {
+			srcDir '../src/main/resources'
+			// bundle only the mapping table the engine loads at runtime
+			include 'retroconvert/**'
+		}
+	}
+}
+
+java {
+	sourceCompatibility = JavaVersion.VERSION_17
+	targetCompatibility = JavaVersion.VERSION_17
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.encoding = 'UTF-8'
+}
+
+gradlePlugin {
+	plugins {
+		retroconvert {
+			id = 'com.periut.retroconvert'
+			implementationClass = 'com.periut.retroconvert.gradle.RetroConvertPlugin'
+		}
+	}
+}
+
+publishing {
+	repositories {
+		mavenLocal()
+		// Publish straight into a file-based maven repo (e.g. the matthewperiut.github.io
+		// 'repository/' folder) with:
+		//   ./gradlew publishAllPublicationsToSiteRepository -Pretroconvert.publishDir=/path/to/repository
+		maven {
+			name = 'site'
+			url = uri(providers.gradleProperty('retroconvert.publishDir')
+					.orElse(layout.buildDirectory.dir('site-repo').map { it.asFile.absolutePath }))
+		}
+	}
+}

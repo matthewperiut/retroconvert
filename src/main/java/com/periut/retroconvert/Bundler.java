@@ -69,6 +69,7 @@ public final class Bundler {
 		String id;
 		String name;
 		String version = "1.0.0";
+		String description = "Self-contained babric bundle assembled by RetroConvert.";
 		List<String> authors = new ArrayList<String>();
 		Icon bundleIcon; // null = no icon on the umbrella
 		final Map<String, Icon> iconByInput = new LinkedHashMap<String, Icon>(); // input filename -> icon
@@ -118,7 +119,10 @@ public final class Bundler {
 		Config config = new Config();
 		config.id = requireString(manifest, "id");
 		config.name = manifest.get("name") != null ? String.valueOf(manifest.get("name")) : config.id;
-		config.version = resolveVersion(requireString(manifest, "version"), inputs);
+		config.version = resolveField(requireString(manifest, "version"), "version", inputs);
+		if (manifest.get("description") != null) {
+			config.description = resolveField(String.valueOf(manifest.get("description")), "description", inputs);
+		}
 		if (manifest.get("authors") instanceof List) {
 			for (Object a : (List<?>) manifest.get("authors")) {
 				config.authors.add(String.valueOf(a));
@@ -156,20 +160,130 @@ public final class Bundler {
 		assemble(inputs, outJar, config);
 	}
 
+	// ---------- bundle into an existing mod (the mod IS the umbrella) ----------
+
+	/**
+	 * Turns an existing mod jar into a self-contained babric bundle: the umbrella's own
+	 * bytecode is reverse-converted to babric, each {@code extraInput} is reverse-converted
+	 * (if it's an ornithe jar) and nested under {@code META-INF/jars/}, optional runtime
+	 * libraries (joptsimple) are downloaded and JiJ'd the same way, and every newly nested
+	 * jar is appended to the umbrella's own {@code fabric.mod.json} {@code jars} list. Any
+	 * jars the umbrella already nests (e.g. via Loom {@code include}) are preserved.
+	 *
+	 * <p>Unlike {@link #assemble}, no umbrella is synthesized — the umbrella's identity
+	 * (id/version/name) is whatever the input mod already declares.
+	 *
+	 * @return the bundled jar's bytes
+	 */
+	public byte[] bundleInto(byte[] umbrellaJar, List<Path> extraInputs, boolean includeRuntimeDeps)
+			throws IOException {
+		JarConverter converter = newReverseConverter();
+
+		// 1. Reverse-convert the umbrella mod itself (its classes/resources and any nested
+		//    jars) to babric. A neutral/already-babric umbrella is left as-is.
+		Map<String, byte[]> umbrella = JarConverter.readEntries(new ByteArrayInputStream(umbrellaJar));
+		if (JarConverter.detect(umbrella) == JarConverter.Kind.ORNITHE) {
+			log.info("Bundler: reverse-converting umbrella mod to babric intermediaries");
+			umbrella = JarConverter.readEntries(new ByteArrayInputStream(converter.convert(umbrella)));
+		}
+		byte[] fmjBytes = umbrella.get("fabric.mod.json");
+		if (fmjBytes == null) {
+			throw new IOException("umbrella jar has no fabric.mod.json");
+		}
+		Object parsedFmj = MiniJson.parse(new String(fmjBytes, StandardCharsets.UTF_8));
+		if (!(parsedFmj instanceof Map)) {
+			throw new IOException("umbrella fabric.mod.json is not a JSON object");
+		}
+		@SuppressWarnings("unchecked")
+		Map<String, Object> fmj = (Map<String, Object>) parsedFmj;
+		String umbrellaId = String.valueOf(fmj.get("id"));
+
+		// Names already occupied under META-INF/jars/ (jars the umbrella JiJ's itself).
+		Map<String, byte[]> nested = new LinkedHashMap<String, byte[]>();
+		List<String> reserved = new ArrayList<String>();
+		for (String name : umbrella.keySet()) {
+			if (name.startsWith("META-INF/jars/") && name.endsWith(".jar")) {
+				reserved.add(name.substring("META-INF/jars/".length()));
+			}
+		}
+
+		// 2. Reverse-convert + nest each extra input.
+		for (Path input : extraInputs) {
+			String inputName = input.getFileName().toString();
+			byte[] bytes = Files.readAllBytes(input);
+			Map<String, byte[]> entries = JarConverter.readEntries(new ByteArrayInputStream(bytes));
+			JarConverter.Kind kind = JarConverter.detect(entries);
+			byte[] outBytes;
+			String outName;
+			if (kind == JarConverter.Kind.ORNITHE) {
+				log.info("Bundler: reverse-converting " + inputName + " to babric intermediaries");
+				outBytes = converter.convert(entries);
+				outName = reverseName(inputName);
+			} else {
+				log.info("Bundler: including " + inputName + " unchanged ("
+						+ kind.name().toLowerCase(Locale.ROOT) + ")");
+				outBytes = bytes;
+				outName = inputName;
+			}
+			outBytes = patchNested(outBytes, null, umbrellaId);
+			nested.put(uniqueAmong(nested, reserved, outName), outBytes);
+		}
+
+		// 3. Runtime libraries the babric environment lacks (joptsimple).
+		if (includeRuntimeDeps) {
+			for (MavenDep dep : RUNTIME_DEPS) {
+				log.info("Bundler: downloading runtime dependency " + dep.fileName);
+				byte[] lib = wrapAsLibraryMod(download(dep.url), dep, umbrellaId);
+				nested.put(uniqueAmong(nested, reserved, dep.fileName), lib);
+			}
+		}
+
+		// 4. Append the new nested jars to the umbrella's own fabric.mod.json jars list,
+		//    preserving any entries already there.
+		List<Object> jars = fmj.get("jars") instanceof List
+				? new ArrayList<Object>((List<?>) fmj.get("jars")) : new ArrayList<Object>();
+		for (String name : nested.keySet()) {
+			Map<String, Object> ref = new LinkedHashMap<String, Object>();
+			ref.put("file", "META-INF/jars/" + name);
+			jars.add(ref);
+		}
+		fmj.put("jars", jars);
+		umbrella.put("fabric.mod.json", MiniJson.write(fmj).getBytes(StandardCharsets.UTF_8));
+
+		// 5. Write the umbrella's entries (minus stale signatures) plus the new nested jars.
+		ByteArrayOutputStream result = new ByteArrayOutputStream(umbrellaJar.length + (1 << 16));
+		ZipOutputStream zip = new ZipOutputStream(result);
+		for (Map.Entry<String, byte[]> e : umbrella.entrySet()) {
+			if (isSignatureFile(e.getKey())) {
+				continue;
+			}
+			writeEntry(zip, e.getKey(), e.getValue());
+		}
+		for (Map.Entry<String, byte[]> e : nested.entrySet()) {
+			writeEntry(zip, "META-INF/jars/" + e.getKey(), e.getValue());
+		}
+		zip.close();
+		log.info("Bundler: bundled " + nested.size() + " jars into " + umbrellaId);
+		return result.toByteArray();
+	}
+
 	// ---------- core assembly ----------
 
-	private void assemble(List<Path> inputs, Path outJar, Config config) throws IOException {
-		TokenMap tokenMap;
+	/** Loads the bundled babric&lt;-&gt;calamus table inverted, ready to convert ornithe -&gt; babric. */
+	private static JarConverter newReverseConverter() throws IOException {
 		InputStream mappingsIn = Converter.class.getResourceAsStream("/retroconvert/babric-to-calamus-b1.7.3.tsv");
 		if (mappingsIn == null) {
 			throw new IOException("bundled mapping resource missing");
 		}
 		try {
-			tokenMap = TokenMap.load(mappingsIn, true);
+			return new JarConverter(TokenMap.load(mappingsIn, true), true);
 		} finally {
 			mappingsIn.close();
 		}
-		JarConverter converter = new JarConverter(tokenMap, true);
+	}
+
+	private void assemble(List<Path> inputs, Path outJar, Config config) throws IOException {
+		JarConverter converter = newReverseConverter();
 
 		// nested jar name -> bytes, insertion order preserved for a stable bundle
 		Map<String, byte[]> nested = new LinkedHashMap<String, byte[]>();
@@ -301,7 +415,7 @@ public final class Bundler {
 		fmj.put("id", config.id);
 		fmj.put("version", config.version);
 		fmj.put("name", config.name);
-		fmj.put("description", "Self-contained babric bundle assembled by RetroConvert.");
+		fmj.put("description", config.description);
 		if (!config.authors.isEmpty()) {
 			fmj.put("authors", new ArrayList<Object>(config.authors));
 		}
@@ -335,8 +449,12 @@ public final class Bundler {
 
 	// ---------- helpers ----------
 
-	/** Resolves a version spec: a literal, or a glob like {@code retroapi*.jar} that lifts the version from a matching input jar's fabric.mod.json. */
-	private static String resolveVersion(String spec, List<Path> inputs) throws IOException {
+	/**
+	 * Resolves a manifest field value: a literal, or a glob like {@code retroapi*.jar}
+	 * that lifts {@code key} (e.g. "version", "description") from the matching input
+	 * jar's fabric.mod.json.
+	 */
+	private static String resolveField(String spec, String key, List<Path> inputs) throws IOException {
 		boolean glob = spec.indexOf('*') >= 0 || spec.endsWith(".jar");
 		if (!glob) {
 			return spec;
@@ -349,13 +467,13 @@ public final class Bundler {
 				byte[] fmj = entries.get("fabric.mod.json");
 				if (fmj != null) {
 					Object parsed = MiniJson.parse(new String(fmj, StandardCharsets.UTF_8));
-					if (parsed instanceof Map && ((Map<?, ?>) parsed).get("version") != null) {
-						return String.valueOf(((Map<?, ?>) parsed).get("version"));
+					if (parsed instanceof Map && ((Map<?, ?>) parsed).get(key) != null) {
+						return String.valueOf(((Map<?, ?>) parsed).get(key));
 					}
 				}
 			}
 		}
-		throw new IOException("version spec '" + spec + "' matched no input jar with a readable version");
+		throw new IOException("spec '" + spec + "' matched no input jar with a readable '" + key + "'");
 	}
 
 	private static String globToRegex(String glob) {
@@ -436,6 +554,21 @@ public final class Bundler {
 			i++;
 		}
 		return stem + "_" + i + ".jar";
+	}
+
+	/** Like {@link #uniqueName} but also avoids names already nested in the umbrella. */
+	private static String uniqueAmong(Map<String, byte[]> taken, List<String> reserved, String name) {
+		if (!taken.containsKey(name) && !reserved.contains(name)) {
+			return name;
+		}
+		String stem = stripJar(name);
+		int i = 1;
+		String candidate;
+		do {
+			candidate = stem + "_" + i + ".jar";
+			i++;
+		} while (taken.containsKey(candidate) || reserved.contains(candidate));
+		return candidate;
 	}
 
 	private static byte[] download(String url) throws IOException {
