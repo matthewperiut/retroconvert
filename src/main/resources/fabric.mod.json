@@ -5,7 +5,7 @@
 	"name": "RetroConvert",
 	"description": "Automatically converts Babric b1.7.3 mods in the mods folder to Ornithe by rewriting their intermediary bytecode at launch.",
 	"authors": [
-		"matthewperiut"
+		"Slainlight"
 	],
 	"contact": {
 		"homepage": "https://github.com/matthewperiut",
