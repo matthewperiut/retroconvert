@@ -7,10 +7,13 @@ import org.gradle.api.DefaultTask;
 import org.gradle.api.file.ConfigurableFileCollection;
 import org.gradle.api.file.RegularFileProperty;
 import org.gradle.api.provider.Property;
+import org.gradle.api.tasks.CacheableTask;
 import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.InputFile;
 import org.gradle.api.tasks.InputFiles;
 import org.gradle.api.tasks.OutputFile;
+import org.gradle.api.tasks.PathSensitive;
+import org.gradle.api.tasks.PathSensitivity;
 import org.gradle.api.tasks.TaskAction;
 
 import java.io.File;
@@ -31,12 +34,17 @@ import java.util.Set;
  * to the mod's own {@code fabric.mod.json}. Both paths reuse the shared engine via
  * {@link Conversions}/{@link Bundler}.
  */
+@CacheableTask
 public abstract class BabricJarTask extends DefaultTask {
+	// NAME_ONLY: the conversion depends on the jar bytes and (for nested bundle entries)
+	// the file names, never on where the jars live on disk.
 	@InputFile
+	@PathSensitive(PathSensitivity.NAME_ONLY)
 	public abstract RegularFileProperty getInputJar();
 
 	/** Dependency jars to reverse-convert and nest into the bundle. Empty = plain reverse-convert. */
 	@InputFiles
+	@PathSensitive(PathSensitivity.NAME_ONLY)
 	public abstract ConfigurableFileCollection getBundleInputs();
 
 	/** When bundling, also download + JiJ runtime libraries the babric env lacks (joptsimple). */
