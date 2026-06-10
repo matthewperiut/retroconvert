@@ -111,39 +111,127 @@ public class RetroConvertExtension {
 		// are no cross-artifact collisions.
 		File outDir = new File(project.getGradle().getGradleUserHomeDir(), "caches/retroconvert/localized");
 		File out = new File(outDir, base + "-" + target + "-" + tag + ".jar");
+		// Nested jar-in-jar mods get exploded next to the converted jar. Loom only
+		// extracts JiJ entries for maven-coordinate dependencies, so for the file
+		// collection we return, the nested mods must already be separate files or
+		// fabric-loader never sees them in a dev run.
+		File jijDir = new File(outDir, base + "-" + target + "-" + tag + "-jij");
 
-		if (out.isFile()) {
+		if (out.isFile() && jijDir.isDirectory()) {
 			project.getLogger().info("retroconvert: localize cache hit for {} -> {}", name, out.getName());
-			return project.files(out);
+			return project.files(localizedFiles(out, jijDir));
 		}
 
 		try {
-			byte[] bytes = Files.readAllBytes(src.toPath());
-			JarConverter.Kind kind = Conversions.detect(bytes);
 			byte[] result;
-			if (kind == want || kind == JarConverter.Kind.NEUTRAL) {
-				// Already in the local intermediary (or carries no tokens at all): pass
-				// through, but still cache a copy so future builds are a pure cache hit.
-				result = bytes;
-				project.getLogger().info("retroconvert: {} already {} (no conversion needed)", name, kind);
+			if (out.isFile()) {
+				// Converted jar cached from a pre-JiJ-extraction plugin version: only the
+				// exploded directory is missing, so reuse the jar instead of reconverting.
+				result = Files.readAllBytes(out.toPath());
 			} else {
-				// babric target <- ornithe source needs the reverse direction; the
-				// ornithe target <- babric source is the forward direction.
-				result = Conversions.convert(bytes, babricTarget);
-				project.getLogger().lifecycle("retroconvert: localized {} ({} -> {})", name, kind, target);
+				byte[] bytes = Files.readAllBytes(src.toPath());
+				JarConverter.Kind kind = Conversions.detect(bytes);
+				if (kind == want || kind == JarConverter.Kind.NEUTRAL) {
+					// Already in the local intermediary (or carries no tokens at all): pass
+					// through, but still cache a copy so future builds are a pure cache hit.
+					result = bytes;
+					project.getLogger().info("retroconvert: {} already {} (no conversion needed)", name, kind);
+				} else {
+					// babric target <- ornithe source needs the reverse direction; the
+					// ornithe target <- babric source is the forward direction.
+					result = Conversions.convert(bytes, babricTarget);
+					project.getLogger().lifecycle("retroconvert: localized {} ({} -> {})", name, kind, target);
+				}
 			}
 
 			Files.createDirectories(outDir.toPath());
-			// Write to a unique temp sibling then move into place, so a cancelled build (or
-			// a concurrent localize of the same key under --parallel) never leaves a
-			// half-written jar that a later run would treat as a cache hit.
-			File tmp = new File(outDir, out.getName() + "." + System.nanoTime() + ".tmp");
-			Files.write(tmp.toPath(), result);
-			Files.move(tmp.toPath(), out.toPath(), StandardCopyOption.REPLACE_EXISTING);
-			return project.files(out);
+			// Explode into a temp sibling first, then move whole artifacts into place, so a
+			// cancelled build (or a concurrent localize of the same key under --parallel)
+			// never leaves half-written output that a later run would treat as a cache hit.
+			File tmpDir = new File(outDir, jijDir.getName() + "." + System.nanoTime() + ".tmp");
+			Files.createDirectories(tmpDir.toPath());
+			int nested = extractNestedMods(result, tmpDir);
+			if (!tmpDir.toPath().equals(jijDir.toPath())) {
+				try {
+					Files.move(tmpDir.toPath(), jijDir.toPath());
+				} catch (IOException raced) {
+					// another build finished the same extraction first; theirs is equivalent
+					deleteRecursively(tmpDir);
+					if (!jijDir.isDirectory()) {
+						throw raced;
+					}
+				}
+			}
+			if (nested > 0) {
+				project.getLogger().lifecycle("retroconvert: exploded {} nested jar(s) from {} for the dev runtime", nested, name);
+			}
+
+			if (!out.isFile()) {
+				File tmp = new File(outDir, out.getName() + "." + System.nanoTime() + ".tmp");
+				Files.write(tmp.toPath(), result);
+				Files.move(tmp.toPath(), out.toPath(), StandardCopyOption.REPLACE_EXISTING);
+			}
+			return project.files(localizedFiles(out, jijDir));
 		} catch (IOException e) {
 			throw new UncheckedIOException(e);
 		}
+	}
+
+	/** The converted jar plus its exploded nested mods, in a stable order. */
+	private static java.util.List<File> localizedFiles(File out, File jijDir) {
+		java.util.List<File> files = new java.util.ArrayList<File>();
+		files.add(out);
+		File[] nested = jijDir.listFiles((dir, n) -> n.endsWith(".jar"));
+		if (nested != null) {
+			java.util.Arrays.sort(nested);
+			files.addAll(java.util.Arrays.asList(nested));
+		}
+		return files;
+	}
+
+	/**
+	 * Writes every nested {@code META-INF/jars/*.jar} that is itself a fabric mod
+	 * into {@code dir}, recursing for deeper nesting. Non-mod nested jars are
+	 * skipped: they cannot sit in a {@code mod*} configuration, and fabric-loader
+	 * ignores JiJ entries in dev anyway. Returns the number of jars written.
+	 */
+	private int extractNestedMods(byte[] jarBytes, File dir) throws IOException {
+		int written = 0;
+		java.util.Map<String, byte[]> entries = JarConverter.readEntries(new java.io.ByteArrayInputStream(jarBytes));
+		for (java.util.Map.Entry<String, byte[]> e : entries.entrySet()) {
+			String entryName = e.getKey();
+			byte[] data = e.getValue();
+			if (data == null || !entryName.startsWith("META-INF/jars/") || !entryName.endsWith(".jar")) {
+				continue;
+			}
+			java.util.Map<String, byte[]> inner;
+			try {
+				inner = JarConverter.readEntries(new java.io.ByteArrayInputStream(data));
+			} catch (IOException unreadable) {
+				continue; // not a readable jar; leave it to the loader in production
+			}
+			if (!inner.containsKey("fabric.mod.json")) {
+				project.getLogger().info("retroconvert: skipping nested non-mod jar {}", entryName);
+				continue;
+			}
+			File f = new File(dir, entryName.substring(entryName.lastIndexOf('/') + 1));
+			if (!f.isFile()) {
+				Files.write(f.toPath(), data);
+				written++;
+			}
+			written += extractNestedMods(data, dir);
+		}
+		return written;
+	}
+
+	private static void deleteRecursively(File file) throws IOException {
+		File[] children = file.listFiles();
+		if (children != null) {
+			for (File child : children) {
+				deleteRecursively(child);
+			}
+		}
+		Files.deleteIfExists(file.toPath());
 	}
 
 	/** First 12 hex chars of the SHA-256 of {@code s} — a short, stable cache tag. */

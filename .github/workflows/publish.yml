@@ -1,0 +1,205 @@
+# Release publishing for retroconvert. Same shape as the general matthewperiut publish
+# workflow (GitHub Release always, Modrinth when MODRINTH_TOKEN + MODRINTH_ID are
+# configured, maven publish into the matthewperiut.github.io pages repo), with one
+# addition: the Gradle plugin that lives in gradle-plugin/.
+#
+# The plugin (com.periut:retroconvert-gradle + the com.periut.retroconvert plugin marker)
+# is versioned independently of the mod and is published to:
+#   * the pages maven repo (via the plugin build's own `site` publishing repository,
+#     pointed straight into pages/repository - Gradle maintains maven-metadata.xml and
+#     checksums for both the jar and the marker pom),
+#   * the GitHub release (the plugin jar is attached alongside the mod jars),
+#   * NOT Modrinth - Modrinth only ever receives the mod jars.
+# The plugin publish is skipped when its version is already in the pages repo, so
+# mod-only releases just re-attach the current plugin jar and touch nothing on pages.
+#
+# Required configuration:
+#   * secret   PAGES_TOKEN    - a PAT with write access to matthewperiut/matthewperiut.github.io
+# Optional configuration:
+#   * secret   MODRINTH_TOKEN - a Modrinth PAT with write scope
+#   * variable MODRINTH_ID    - the mod's Modrinth project id or slug
+#
+# The workflow must exist on the default branch for the release event to pick it up.
+name: Publish
+
+on:
+  release:
+    types: [ published ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build mod (and publish to Maven Local)
+        run: |
+          chmod +x ./gradlew
+          ./gradlew build publishToMavenLocal
+
+      - name: Build gradle plugin
+        working-directory: gradle-plugin
+        run: |
+          chmod +x ./gradlew
+          ./gradlew build
+
+      - name: Resolve mod coordinates
+        id: mod
+        run: |
+          props=$(./gradlew properties -q --console=plain)
+          version=$(echo "$props" | awk -F': ' '$1 == "version" { print $2; exit }')
+          group=$(echo "$props" | awk -F': ' '$1 == "group" { print $2; exit }')
+          base=$(sed -nE 's/^[[:space:]]*archives_base_name[[:space:]]*=[[:space:]]*//p' gradle.properties | head -1)
+          mc=$(sed -nE 's/^[[:space:]]*minecraft_version[[:space:]]*=[[:space:]]*//p' gradle.properties | head -1)
+          main_jar="build/libs/${base}-${version}.jar"
+          if [ ! -f "$main_jar" ]; then
+            echo "::error::expected mod jar not found: $main_jar (archives_base_name=$base, version=$version)"
+            exit 1
+          fi
+          case "$version" in
+            *alpha*) vtype=alpha ;;
+            *beta*)  vtype=beta ;;
+            *)       vtype=release ;;
+          esac
+          {
+            echo "version=$version"
+            echo "group=$group"
+            echo "base=$base"
+            echo "minecraft_version=$mc"
+            echo "main_jar=$main_jar"
+            echo "version_type=$vtype"
+          } >> "$GITHUB_OUTPUT"
+          echo "resolved mod: $group:$base:$version (mc $mc)"
+
+      - name: Resolve gradle plugin coordinates
+        id: plugin
+        run: |
+          pversion=$(sed -nE "s/^version[[:space:]]*=[[:space:]]*'([^']+)'.*/\1/p" gradle-plugin/build.gradle | head -1)
+          plugin_jar="gradle-plugin/build/libs/retroconvert-gradle-${pversion}.jar"
+          if [ ! -f "$plugin_jar" ]; then
+            echo "::error::expected plugin jar not found: $plugin_jar"
+            exit 1
+          fi
+          echo "version=$pversion" >> "$GITHUB_OUTPUT"
+          echo "jar=$plugin_jar" >> "$GITHUB_OUTPUT"
+          echo "resolved plugin: com.periut:retroconvert-gradle:$pversion"
+
+      # --- GitHub release: mod jar + gradle plugin jar (idempotent - updates the tag's release) ---
+      - name: Publish to GitHub Releases
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.mod.outputs.main_jar }}
+            ${{ steps.plugin.outputs.jar }}
+          fail_on_unmatched_files: true
+
+      # --- Maven repository / manifest on matthewperiut.github.io ---
+      # Runs BEFORE Modrinth so a Modrinth duplicate-version rejection on a re-run can't
+      # block the pages auto-update. All pages steps are idempotent.
+      - name: Checkout pages repo
+        uses: actions/checkout@v4
+        with:
+          repository: matthewperiut/matthewperiut.github.io
+          token: ${{ secrets.PAGES_TOKEN }}
+          path: pages
+
+      # The plugin build already knows how to publish into a file-based maven repo
+      # (publishing.repositories.site, driven by -Pretroconvert.publishDir): point it at
+      # pages/repository and Gradle writes the jar, the plugin marker pom, the poms/module
+      # metadata, maven-metadata.xml and all checksums itself. Guarded so an
+      # already-published plugin version produces no pages diff.
+      - name: Publish gradle plugin to pages maven repo
+        run: |
+          pver="${{ steps.plugin.outputs.version }}"
+          if [ -f "pages/repository/com/periut/retroconvert-gradle/${pver}/retroconvert-gradle-${pver}.jar" ]; then
+            echo "::notice::retroconvert-gradle ${pver} already in the pages maven repo; skipping plugin publish"
+          else
+            (cd gradle-plugin && ./gradlew publishAllPublicationsToSiteRepository \
+              "-Pretroconvert.publishDir=${GITHUB_WORKSPACE}/pages/repository")
+          fi
+
+      - name: Update pages for the mod (maven repo, manifest)
+        run: |
+          python3 .github/scripts/update_pages.py \
+            --pages pages \
+            --group "${{ steps.mod.outputs.group }}" \
+            --artifact-hint "${{ steps.mod.outputs.base }}" \
+            --version "${{ steps.mod.outputs.version }}" \
+            --commit "${{ github.sha }}" \
+            --branch "${{ github.event.release.target_commitish || github.ref_name }}" \
+            --repo "${{ github.repository }}"
+
+      # update_pages.py only regenerates the repository tree when the MOD version is new;
+      # a plugin-only publish also changes the tree, so regenerate it unconditionally.
+      - name: Regenerate repository-tree.json
+        run: |
+          python3 - <<'EOF'
+          import json, os
+          from pathlib import Path
+          pages = Path("pages")
+          def build(p):
+              return {"children": {e: build(p / e) if (p / e).is_dir() else {}
+                                   for e in sorted(os.listdir(p))}}
+          repo = pages / "repository"
+          if repo.is_dir():
+              (pages / "repository-tree.json").write_text(json.dumps(build(repo)))
+              print("regenerated repository-tree.json")
+          EOF
+
+      - name: Commit & push pages
+        working-directory: pages
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no pages changes to commit"
+          else
+            git commit -m "actions: update retroconvert"
+            git push
+          fi
+
+      # --- Modrinth (last: non-idempotent - rejects a duplicate version on re-runs) ---
+      # The gradle plugin is deliberately absent here: Modrinth only gets the mod jar.
+      - name: Detect Modrinth configuration
+        id: modrinth
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          MODRINTH_ID: ${{ vars.MODRINTH_ID }}
+        run: |
+          if [ -n "$MODRINTH_TOKEN" ] && [ -n "$MODRINTH_ID" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::MODRINTH_TOKEN secret and/or MODRINTH_ID variable not configured; skipping Modrinth publish"
+          fi
+
+      - name: Publish to Modrinth
+        if: steps.modrinth.outputs.enabled == 'true'
+        uses: Kir-Antipov/mc-publish@v3.3
+        with:
+          modrinth-id: ${{ vars.MODRINTH_ID }}
+          modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
+          files: ${{ steps.mod.outputs.main_jar }}
+          name: ${{ github.event.repository.name }} ${{ steps.mod.outputs.version }} (Ornithe)
+          version: ${{ steps.mod.outputs.version }}
+          version-type: ${{ steps.mod.outputs.version_type }}
+          loaders: ornithe
+          game-versions: ${{ steps.mod.outputs.minecraft_version }}
+          # b1.7.3 is an old_beta; mc-publish's default game-version-filter (releases | min-major |
+          # min-minor) drops it, leaving an empty list -> "At least one game version should be
+          # specified". `any` keeps beta/alpha versions so b1.7.3 survives.
+          game-version-filter: any
+          changelog: ${{ github.event.release.body }}
