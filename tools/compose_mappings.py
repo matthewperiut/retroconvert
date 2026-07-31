@@ -227,12 +227,17 @@ for owner_int, desc_int, n_int, n_g, n_s, n_c in b_fields:
 # ---------- reverse-disambiguation rows for many-to-one (calamus merged) tokens ----------
 # A calamus token that several babric tokens map to is ambiguous on the way back.
 # Methods split by owner: emit owner-aware reverse rows in calamus space.
-m_target_count = defaultdict(int)
-for _o, _d, _t, tgt, _c in m_token_recs:
-    m_target_count[tgt] += 1
+# Count DISTINCT babric tokens, not records: one method inherited by several
+# owners yields one record per owner but a single babric token, which is not
+# ambiguous. Emitting RM rows for it would push it out of the bare-name reverse
+# map, and mixin annotation strings (@Inject(method = "m_NNNNNNNN")) have no
+# owner to fall back on.
+m_target_tokens = defaultdict(set)
+for _o, _d, tok, tgt, _c in m_token_recs:
+    m_target_tokens[tgt].add(tok)
 rev_methods = []   # (calamusOwner, calamusName, calamusDesc, babricToken)
 for owner_int, desc_int, token, target, n_c in m_token_recs:
-    if m_target_count[target] > 1:
+    if len(m_target_tokens[target]) > 1:
         c_owner = class_map.get(owner_int, owner_int)
         c_desc = remap_desc(desc_int, class_map)
         rev_methods.append((c_owner, target, c_desc, token))

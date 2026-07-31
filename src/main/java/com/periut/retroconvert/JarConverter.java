@@ -134,8 +134,18 @@ public final class JarConverter {
 	}
 
 	private static boolean isScannable(String name) {
-		return name.endsWith(".class") || name.endsWith(".json") || name.endsWith(".accesswidener")
-				|| name.equals("fabric.mod.json");
+		return name.endsWith(".class") || isTextResource(name);
+	}
+
+	/**
+	 * Token-bearing text resources: fabric.mod.json, mixin configs, refmaps and
+	 * accesswideners. Matched case-insensitively — loom writes the access widener
+	 * with whatever name the mod chose, and "retrodragon.accessWidener" is as
+	 * common as the all-lowercase spelling.
+	 */
+	private static boolean isTextResource(String name) {
+		String lower = name.toLowerCase(java.util.Locale.ROOT);
+		return lower.endsWith(".json") || lower.endsWith(".accesswidener");
 	}
 
 	/** Converts a whole babric jar (as an entry map) to ornithe, recursing into nested jars. */
@@ -184,7 +194,7 @@ public final class JarConverter {
 				continue;
 			} else if (name.endsWith(".class")) {
 				outData = convertClass(data, remapper);
-			} else if (name.endsWith(".json") || name.endsWith(".accesswidener")) {
+			} else if (isTextResource(name)) {
 				// covers fabric.mod.json, mixin configs, refmaps and accesswideners:
 				// babric tokens are unambiguous, so plain token remapping is safe
 				String text = new String(data, StandardCharsets.UTF_8);

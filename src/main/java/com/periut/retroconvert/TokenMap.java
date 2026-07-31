@@ -86,7 +86,13 @@ public final class TokenMap {
 		// reverse-only: calamus tokens that several babric tokens merged into. They
 		// must not resolve by bare name; RM/RF rows resolve them owner-aware (methods)
 		// or with a client-preferred override (fields), applied after the main pass.
+		// An RM name whose rows all name the SAME babric token is not actually
+		// ambiguous (the composer emits a row per owner, and an inherited method
+		// appears under several owners) — it must stay in the global map, because
+		// mixin annotation strings like @Inject(method = "m_72354999") are remapped
+		// by bare name with no owner in hand.
 		java.util.Set<String> ambiguousMethods = new java.util.HashSet<String>();
+		Map<String, String> rmTargets = new HashMap<String, String>();
 		Map<String, String> reverseFieldOverrides = new HashMap<String, String>();
 		BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
 		String line;
@@ -124,7 +130,10 @@ public final class TokenMap {
 				// reverse owner-aware disambiguation: <calamusOwner> <calamusName> <calamusDesc> <babricToken>
 				if (reverse) {
 					map.ownerMethods.put(parts[1] + '\0' + parts[2] + '\0' + parts[3], parts[4]);
-					ambiguousMethods.add(parts[2]);
+					String previous = rmTargets.put(parts[2], parts[4]);
+					if (previous != null && !previous.equals(parts[4])) {
+						ambiguousMethods.add(parts[2]);
+					}
 				}
 				break;
 			case "RF":

@@ -44,4 +44,46 @@ final class Conversions {
 	static JarConverter.Kind detect(byte[] jarBytes) throws IOException {
 		return JarConverter.detect(JarConverter.readEntries(new ByteArrayInputStream(jarBytes)));
 	}
+
+	/**
+	 * Collects up to {@code limit} distinct calamus gen2 tokens still present in a
+	 * jar, recursing into nested META-INF/jars. Used to sanity-check the output of
+	 * a reverse conversion, which should have none.
+	 */
+	static java.util.Set<String> findCalamusTokens(byte[] jarBytes, int limit) throws IOException {
+		java.util.Set<String> found = new java.util.LinkedHashSet<String>();
+		collectCalamusTokens(JarConverter.readEntries(new ByteArrayInputStream(jarBytes)), limit, found);
+		return found;
+	}
+
+	private static void collectCalamusTokens(Map<String, byte[]> entries, int limit,
+			java.util.Set<String> found) throws IOException {
+		for (Map.Entry<String, byte[]> e : entries.entrySet()) {
+			byte[] data = e.getValue();
+			if (data == null) {
+				continue;
+			}
+			String name = e.getKey();
+			if (name.startsWith("META-INF/jars/") && name.endsWith(".jar")) {
+				collectCalamusTokens(JarConverter.readEntries(new ByteArrayInputStream(data)), limit, found);
+			} else if (isScannable(name)) {
+				java.util.regex.Matcher m = CALAMUS_TOKEN.matcher(
+						new String(data, java.nio.charset.StandardCharsets.ISO_8859_1));
+				while (m.find() && found.size() < limit) {
+					found.add(m.group());
+				}
+			}
+			if (found.size() >= limit) {
+				return;
+			}
+		}
+	}
+
+	private static boolean isScannable(String name) {
+		String lower = name.toLowerCase(java.util.Locale.ROOT);
+		return lower.endsWith(".class") || lower.endsWith(".json") || lower.endsWith(".accesswidener");
+	}
+
+	private static final java.util.regex.Pattern CALAMUS_TOKEN = java.util.regex.Pattern.compile(
+			"net/minecraft/unmapped/C_\\d{8}|\\bm_\\d{8}\\b|\\bf_\\d{8}\\b|\\bC_\\d{8}\\b");
 }

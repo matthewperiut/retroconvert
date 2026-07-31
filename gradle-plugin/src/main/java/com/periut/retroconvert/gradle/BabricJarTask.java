@@ -75,9 +75,26 @@ public abstract class BabricJarTask extends DefaultTask {
 					inputs.size(), out.getName());
 		}
 
+		warnOnCalamusResidue(result, out.getName());
+
 		Files.createDirectories(out.toPath().getParent());
 		Files.write(out.toPath(), result);
 		getLogger().lifecycle("retroconvert: wrote {}", out.getName());
+	}
+
+	/**
+	 * A finished babric jar must contain no calamus tokens at all. Anything left
+	 * is a mapping gap, and it fails far away from here — a leftover token in a
+	 * mixin annotation only surfaces as an InvalidInjectionException at game
+	 * launch. Warn (never fail) with the actual tokens, so the next gap is one
+	 * grep away.
+	 */
+	private void warnOnCalamusResidue(byte[] jarBytes, String name) throws IOException {
+		Set<String> leftovers = Conversions.findCalamusTokens(jarBytes, 10);
+		if (!leftovers.isEmpty()) {
+			getLogger().warn("retroconvert: {} still contains calamus tokens after reverse conversion "
+					+ "(mapping gap, these will fail at runtime): {}", name, leftovers);
+		}
 	}
 
 	private byte[] reverseConvertOnly(byte[] bytes, String name) throws IOException {
