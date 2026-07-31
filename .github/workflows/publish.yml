@@ -134,18 +134,24 @@ jobs:
       # gradle.properties (the plugins block reads it via "${retroconvert_version}");
       # keep that pin on the released plugin version. Idempotent: re-bumping to the
       # current version changes nothing.
-      - name: Bump retroconvert_version in pages docs and template zips
+      - name: Bump retroconvert_version in pages docs, template zips and manifest
         run: |
           python3 - "${{ steps.plugin.outputs.version }}" <<'EOF'
           import sys
           sys.path.insert(0, ".github/scripts")
           from pathlib import Path
-          from update_pages import DOCS_DIR, TEMPLATE_ZIPS, bump_docs, bump_template_zip
+          from update_pages import DOCS_DIR, TEMPLATE_ZIPS, bump_docs, bump_template_zip, update_manifest
           version = sys.argv[1]
           pages = Path("pages")
           bump_docs(pages, ["retroconvert_version"], version)
           for name in TEMPLATE_ZIPS:
               bump_template_zip(pages / DOCS_DIR / name, ["retroconvert_version"], version)
+          # update_pages.py only knows about the mod; the plugin's manifest entry (what the
+          # pages front page shows as its current version) has to be bumped here.
+          update_manifest(pages, "com.periut", "retroconvert-gradle", version,
+                          "${{ github.sha }}",
+                          "${{ github.event.release.target_commitish || github.ref_name }}",
+                          "${{ github.repository }}")
           EOF
 
       - name: Update pages for the mod (maven repo, manifest)
