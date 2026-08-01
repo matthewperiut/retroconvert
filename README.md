@@ -34,7 +34,7 @@ with ASM, which fabric loader already provides at runtime.
      signature, and stack frame
    - mixin annotations — both refmap-less string targets
      (`@Inject(method = "method_1977")`) and `@Mixin(class_475.class)` refs
-   - the refmap json, accesswidener, and `fabric.mod.json`
+   - the refmap json, accesswidener/classtweaker, and `fabric.mod.json`
    - string constants, so reflection by intermediary name keeps working
      (e.g. a `getField("field_220")` candidate becomes `"f_92455821"`)
    - nested `META-INF/jars/*.jar` (jar-in-jar), recursively

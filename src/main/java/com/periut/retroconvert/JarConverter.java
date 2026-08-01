@@ -138,14 +138,16 @@ public final class JarConverter {
 	}
 
 	/**
-	 * Token-bearing text resources: fabric.mod.json, mixin configs, refmaps and
-	 * accesswideners. Matched case-insensitively — loom writes the access widener
-	 * with whatever name the mod chose, and "retrodragon.accessWidener" is as
-	 * common as the all-lowercase spelling.
+	 * Token-bearing text resources: fabric.mod.json, mixin configs, refmaps,
+	 * accesswideners and ornithe's classtweakers (the accesswidener successor OSL
+	 * and other ornithe libraries ship — same token soup, different extension).
+	 * Matched case-insensitively — loom writes the access widener with whatever
+	 * name the mod chose, and "retrodragon.accessWidener" is as common as the
+	 * all-lowercase spelling.
 	 */
 	private static boolean isTextResource(String name) {
 		String lower = name.toLowerCase(java.util.Locale.ROOT);
-		return lower.endsWith(".json") || lower.endsWith(".accesswidener");
+		return lower.endsWith(".json") || lower.endsWith(".accesswidener") || lower.endsWith(".classtweaker");
 	}
 
 	/** Converts a whole babric jar (as an entry map) to ornithe, recursing into nested jars. */

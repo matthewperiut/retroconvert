@@ -25,19 +25,43 @@ final class Conversions {
 	 *                babric -&gt; ornithe.
 	 */
 	static byte[] convert(byte[] jarBytes, boolean reverse) throws IOException {
+		TokenMap map = loadMap(reverse);
+		JarConverter converter = new JarConverter(map, reverse);
+		Map<String, byte[]> entries = JarConverter.readEntries(new ByteArrayInputStream(jarBytes));
+		return converter.convert(entries);
+	}
+
+	static TokenMap loadMap(boolean reverse) throws IOException {
 		InputStream in = Conversions.class.getResourceAsStream(MAPPING);
 		if (in == null) {
 			throw new IOException("bundled mapping resource missing: " + MAPPING);
 		}
-		TokenMap map;
 		try {
-			map = TokenMap.load(in, reverse);
+			return TokenMap.load(in, reverse);
 		} finally {
 			in.close();
 		}
-		JarConverter converter = new JarConverter(map, reverse);
-		Map<String, byte[]> entries = JarConverter.readEntries(new ByteArrayInputStream(jarBytes));
-		return converter.convert(entries);
+	}
+
+	/**
+	 * Splits leftover calamus tokens into the ones b1.7.3 mappings actually cover
+	 * — those are real conversion gaps and will fail at runtime — and the rest,
+	 * which name members of some other Minecraft version and are unconvertible by
+	 * construction.
+	 */
+	static java.util.Set<String> mappable(java.util.Set<String> tokens) throws IOException {
+		TokenMap map = loadMap(true);
+		if (map.reverseKnown.isEmpty()) {
+			// would silently reclassify every real gap as "other version" and lose the warning
+			throw new IOException("reverse token map is empty; mapping resource " + MAPPING + " is broken");
+		}
+		java.util.Set<String> gaps = new java.util.LinkedHashSet<String>();
+		for (String token : tokens) {
+			if (map.reverseKnown.contains(token)) {
+				gaps.add(token);
+			}
+		}
+		return gaps;
 	}
 
 	/** Detects which intermediary a jar's bytecode/resources use. */
@@ -81,7 +105,8 @@ final class Conversions {
 
 	private static boolean isScannable(String name) {
 		String lower = name.toLowerCase(java.util.Locale.ROOT);
-		return lower.endsWith(".class") || lower.endsWith(".json") || lower.endsWith(".accesswidener");
+		return lower.endsWith(".class") || lower.endsWith(".json") || lower.endsWith(".accesswidener")
+				|| lower.endsWith(".classtweaker");
 	}
 
 	private static final java.util.regex.Pattern CALAMUS_TOKEN = java.util.regex.Pattern.compile(

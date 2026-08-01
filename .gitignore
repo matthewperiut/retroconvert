@@ -30,5 +30,8 @@ bin/
 # Eclipse JDT LS
 workspace/
 
+# Python (.github/scripts)
+__pycache__/
+
 # macOS
 *.DS_Store

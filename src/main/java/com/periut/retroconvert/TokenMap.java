@@ -34,6 +34,15 @@ public final class TokenMap {
 	public final Map<String, String> ownerMethods = new HashMap<String, String>();
 	/** key: owner + '\0' + name */
 	public final Map<String, String> ownerFields = new HashMap<String, String>();
+	/**
+	 * Reverse only: every calamus token this map can translate, in both the
+	 * internal-name and bare spellings the residue scanner sees. A leftover token
+	 * that is NOT in here belongs to some other Minecraft version (multi-version
+	 * ornithe libraries reference members that only exist at the top of their
+	 * supported range) — b1.7.3 has no counterpart to convert it to, and the code
+	 * that touches it is just as dead under ornithe.
+	 */
+	public final java.util.Set<String> reverseKnown = new java.util.HashSet<String>();
 
 	private static final Pattern BARE_MC_CLASS = Pattern.compile("net/minecraft/class_\\d+");
 
@@ -168,6 +177,12 @@ public final class TokenMap {
 				map.methods.remove(name);
 			}
 			map.fields.putAll(reverseFieldOverrides);
+			map.reverseKnown.addAll(map.classes.keySet());
+			map.reverseKnown.addAll(map.bareClasses.keySet());
+			map.reverseKnown.addAll(map.methods.keySet());
+			map.reverseKnown.addAll(map.fields.keySet());
+			// ambiguous tokens left the bare map but are still translatable owner-aware
+			map.reverseKnown.addAll(ambiguousMethods);
 		}
 		return map;
 	}

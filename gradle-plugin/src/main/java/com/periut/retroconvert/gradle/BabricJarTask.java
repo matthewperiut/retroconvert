@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -83,17 +84,36 @@ public abstract class BabricJarTask extends DefaultTask {
 	}
 
 	/**
-	 * A finished babric jar must contain no calamus tokens at all. Anything left
-	 * is a mapping gap, and it fails far away from here — a leftover token in a
-	 * mixin annotation only surfaces as an InvalidInjectionException at game
-	 * launch. Warn (never fail) with the actual tokens, so the next gap is one
-	 * grep away.
+	 * A finished babric jar should contain no calamus token that b1.7.3 mappings
+	 * cover. One that survives is a mapping gap, and it fails far away from here —
+	 * a leftover token in a mixin annotation only surfaces as an
+	 * InvalidInjectionException at game launch. Warn (never fail) with the actual
+	 * tokens, so the next gap is one grep away.
+	 *
+	 * <p>Tokens outside those mappings are a different animal and must not be
+	 * warned about: ornithe's multi-version libraries (OSL and friends, versioned
+	 * {@code +mcb1.0-mc13w39b}) are compiled against the newest version of their
+	 * range, so they carry references to members that simply do not exist in
+	 * b1.7.3. Calamus numbers each version separately, so there is nothing to
+	 * convert them to — and the code paths touching them are exactly as dead
+	 * under ornithe as under babric.
 	 */
 	private void warnOnCalamusResidue(byte[] jarBytes, String name) throws IOException {
 		Set<String> leftovers = Conversions.findCalamusTokens(jarBytes, 10);
-		if (!leftovers.isEmpty()) {
+		if (leftovers.isEmpty()) {
+			return;
+		}
+		Set<String> gaps = Conversions.mappable(leftovers);
+		if (!gaps.isEmpty()) {
 			getLogger().warn("retroconvert: {} still contains calamus tokens after reverse conversion "
-					+ "(mapping gap, these will fail at runtime): {}", name, leftovers);
+					+ "(mapping gap, these will fail at runtime): {}", name, gaps);
+		}
+		Set<String> foreign = new LinkedHashSet<>(leftovers);
+		foreign.removeAll(gaps);
+		if (!foreign.isEmpty()) {
+			getLogger().info("retroconvert: {} keeps {} calamus token(s) with no b1.7.3 equivalent "
+					+ "(other-version references from a multi-version library, dead here either way): {}",
+					name, foreign.size(), foreign);
 		}
 	}
 
